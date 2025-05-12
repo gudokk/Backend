@@ -7,6 +7,7 @@ from .config import SECRET_KEY, ALGORITHM
 from jose import jwt
 import bcrypt
 import datetime
+from fastapi.responses import JSONResponse
 
 router = APIRouter()
 
@@ -37,10 +38,12 @@ async def register_user(user: UserCreate):
             conn.close()
             raise HTTPException(status_code=400, detail="Username already exists.")
 
+        registration_date = datetime.date.today()
         cursor.execute(
-            "INSERT INTO Users (username, email, password) VALUES (%s, %s, %s) RETURNING id",
-            (user.username, user.email, hashed_password.decode('utf-8'))
+            "INSERT INTO Users (username, email, password, registration_date) VALUES (%s, %s, %s, %s) RETURNING id",
+            (user.username, user.email, hashed_password.decode('utf-8'), registration_date)
         )
+
         user_id = cursor.fetchone()[0]
 
         conn.commit()
@@ -109,3 +112,4 @@ async def get_profile(Authorization: str = Header(...)):
     except Exception as e:
         print(f"Database error: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
+

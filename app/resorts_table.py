@@ -18,13 +18,13 @@ SELECT
     sr.max_height,
 
     -- Длина зелёной трассы
-    (SELECT t.trail_length FROM tracks t WHERE t.resort_id = sr.id AND t.trail_type = 'Зелёная' LIMIT 1) AS green,
+    (SELECT t.trail_length FROM tracks t WHERE t.resort_id = sr.id AND t.trail_type = 'Зелёная' LIMIT 7) AS green,
     -- Длина синей трассы
-    (SELECT t.trail_length FROM tracks t WHERE t.resort_id = sr.id AND t.trail_type = 'Синяя' LIMIT 1) AS blue,
+    (SELECT t.trail_length FROM tracks t WHERE t.resort_id = sr.id AND t.trail_type = 'Синяя' LIMIT 7) AS blue,
     -- Длина красной трассы
-    (SELECT t.trail_length FROM tracks t WHERE t.resort_id = sr.id AND t.trail_type = 'Красная' LIMIT 1) AS red,
+    (SELECT t.trail_length FROM tracks t WHERE t.resort_id = sr.id AND t.trail_type = 'Красная' LIMIT 7) AS red,
     -- Длина чёрной трассы
-    (SELECT t.trail_length FROM tracks t WHERE t.resort_id = sr.id AND t.trail_type = 'Чёрная' LIMIT 1) AS black,
+    (SELECT t.trail_length FROM tracks t WHERE t.resort_id = sr.id AND t.trail_type = 'Чёрная' LIMIT 7) AS black,
 
     -- Подъёмники
     STRING_AGG(CONCAT(tl.lift_type, ': ', tl.lift_count), ', ') AS lifts

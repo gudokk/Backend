@@ -1,23 +1,26 @@
-from fastapi import Request, HTTPException
+from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import JSONResponse
 from jose import jwt, JWTError
 import re
 
-SECRET_KEY = "my_super_secret_key"
-ALGORITHM = "HS256"
+from .config import SECRET_KEY, ALGORITHM
 
-# Список публичных маршрутов (как обычные строки или шаблоны)
 PUBLIC_PATH_PATTERNS = [
     r"^/api/login$",
-    r"^/api/resorts-table$",
     r"^/api/register$",
     r"^/api/news$",
-    r"^/api/newsPage/{article_id}",
     r"^/api/newsPage$",
     r"^/api/newsPage/\d+$",
     r"^/api/resorts$",
+    r"^/api/resorts-table$",
+    r"^/api/resort-features/\d+$",
+    r"^/api/resorts/selector$",
     r"^/api/resorts/\d+$",
+    r"^/api/resorts/\d+/hotels$",
+    r"^/api/resorts/\d+/reviews$",
     r"^/api/resort-images/[^/]+$",
+    r"^/api/hotels-images/\d+/\d+$",
     r"^/api/article_images.*$",
     r"^/docs$",
     r"^/openapi.json$"
@@ -27,29 +30,22 @@ class AuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
 
-        if path.startswith("/static"):
-            # Для статических файлов не требуем авторизации
+        # Разрешаем доступ к статике и публичным маршрутам
+        if path.startswith("/static") or any(re.match(pattern, path) for pattern in PUBLIC_PATH_PATTERNS):
             return await call_next(request)
 
-        # Разрешаем доступ к публичным маршрутам
-        for pattern in PUBLIC_PATH_PATTERNS:
-            if re.match(pattern, path):
-                return await call_next(request)
-
-        # Проверка заголовка авторизации
         auth_header = request.headers.get("Authorization")
         if not auth_header or not auth_header.startswith("Bearer "):
-            raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
+            return JSONResponse(status_code=401, content={"detail": "Missing or invalid Authorization header"})
 
         token = auth_header.split(" ")[1]
         try:
             payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
             user_id = payload.get("sub")
             if user_id is None:
-                raise HTTPException(status_code=401, detail="Invalid token payload")
+                return JSONResponse(status_code=401, content={"detail": "Invalid token payload"})
             request.state.user_id = user_id
-        except JWTError:
-            raise HTTPException(status_code=401, detail="Invalid or expired token")
+        except JWTError as e:
+            return JSONResponse(status_code=401, content={"detail": f"Invalid or expired token: {str(e)}"})
 
-        # Всё хорошо — передаём дальше
         return await call_next(request)

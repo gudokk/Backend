@@ -20,14 +20,14 @@ async def create_article(
         conn = get_db_connection()
         cursor = conn.cursor()
 
-        # 1. Вставка статьи
+        # 7. Вставка статьи
         cursor.execute("""
             INSERT INTO articles (title, content, author_id)
             VALUES (%s, %s, %s) RETURNING id
         """, (title, content, author_id))
         article_id = cursor.fetchone()[0]
 
-        # 2. Сохранение изображений
+        # 8. Сохранение изображений
         image_paths = []
         os.makedirs(UPLOAD_DIR, exist_ok=True)
 

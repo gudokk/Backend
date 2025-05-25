@@ -14,6 +14,7 @@ def get_all_articles_with_tags():
         FROM articles a
         JOIN users u ON a.author_id = u.id
         LEFT JOIN article_images ai ON a.id = ai.article_id
+        WHERE a.is_published = TRUE
         ORDER BY a.publication_date DESC
     """)
     articles = cursor.fetchall()

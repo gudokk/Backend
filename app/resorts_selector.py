@@ -1,14 +1,14 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
+from typing import Optional
 from .db import get_db_connection
 
 router = APIRouter()
-from fastapi import Query
-from typing import Optional
 
 @router.get("/api/resorts/selector")
 def get_resorts_for_selector(
     snow_last_3_days: Optional[bool] = Query(None),
     snow_expected: Optional[bool] = Query(None),
+    slopes: Optional[str] = Query(None)  # Новое поле: "Синие", "Красные", "Чёрные"
 ):
     try:
         conn = get_db_connection()
@@ -24,6 +24,16 @@ def get_resorts_for_selector(
         if snow_expected is not None:
             filters.append("rwth.snow_expected = %s")
             params.append(snow_expected)
+
+        if slopes:
+            if slopes == "Зелёные":
+                filters.append("COALESCE(trails.trail_green, 0) > 0")
+            elif slopes == "Синие":
+                filters.append("COALESCE(trails.trail_blue, 0) > 0")
+            elif slopes == "Красные":
+                filters.append("COALESCE(trails.trail_red, 0) > 0")
+            elif slopes == "Чёрная":
+                filters.append("COALESCE(trails.trail_black, 0) > 0")
 
         where_clause = "WHERE " + " AND ".join(filters) if filters else ""
 

@@ -1,8 +1,8 @@
 # app/auth.py
 
-from fastapi import APIRouter, HTTPException, Header, Depends, File, UploadFile, Form, status
+from fastapi import APIRouter, HTTPException, Header, Depends, File, UploadFile, Form, status, requests
 from .models import UserCreate, UserLogin
-import os
+import os, shutil, json
 from fastapi.responses import JSONResponse
 from .db import get_db_connection
 from .config import SECRET_KEY, ALGORITHM
@@ -150,82 +150,125 @@ async def refresh_token(refresh_token: str = Header(...)):
 
 
 @router.get("/api/profile")
-async def get_profile(user_id: int = Depends(get_current_user)):
+def get_profile(user_id=Depends(get_current_user)):
+    conn = get_db_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT id, username, email, registration_date, description, gender, photo, is_admin, is_blogger
+        FROM users
+        WHERE id = %s
+    """, (user_id,))
+    row = cur.fetchone()
+
+    cur.execute("""
+        SELECT EXISTS (
+            SELECT 1 FROM blogger_requests
+            WHERE user_id = %s AND status = 'pending'
+        )
+    """, (user_id,))
+    has_pending = cur.fetchone()[0]
+
+    cur.close()
+    conn.close()
+
+    return {
+        "id": row[0],
+        "username": row[1],
+        "email": row[2],
+        "registration_date": row[3],
+        "description": row[4],
+        "gender": row[5],
+        "photo": row[6],
+        "is_admin": row[7],
+        "is_blogger": row[8],
+        "has_pending_blogger_request": has_pending  # 👈 добавили поле
+    }
+
+@router.get("/api/users/search")
+def search_users(query: str, user_id: int = Depends(get_current_user)):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT id, username FROM users
+        WHERE username ILIKE %s AND id != %s
+        LIMIT 20
+    """, (f"%{query}%", user_id))
+    results = cur.fetchall()
+    cur.close()
+    conn.close()
+    return [{"id": r[0], "username": r[1]} for r in results]
+
+@router.post("/api/friends/add/{friend_id}")
+def add_friend(friend_id: int, user_id: int = Depends(get_current_user)):
+    if friend_id == user_id:
+        raise HTTPException(400, detail="Нельзя добавить самого себя")
+    conn = get_db_connection()
+    cur = conn.cursor()
+
+    # Проверка на существование
+    cur.execute("SELECT 1 FROM users WHERE id = %s", (friend_id,))
+    if not cur.fetchone():
+        raise HTTPException(404, detail="Пользователь не найден")
+
+    # Вставка двух записей
     try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-
-        cursor.execute("""
-            SELECT id, username, email, registration_date, description, gender, photo, is_admin
-            FROM users
-            WHERE id = %s
-        """, (user_id,))
-        result = cursor.fetchone()
-
-        if not result:
-            raise HTTPException(status_code=404, detail="User not found")
-
-        (
-            user_id,
-            username,
-            email,
-            registration_date,
-            description,
-            gender,
-            photo,
-            is_admin
-        ) = result
-
-        cursor.close()
+        cur.execute("""
+            INSERT INTO friendships (user_id, friend_id) VALUES (%s, %s)
+            ON CONFLICT DO NOTHING
+        """, (user_id, friend_id))
+        cur.execute("""
+            INSERT INTO friendships (user_id, friend_id) VALUES (%s, %s)
+            ON CONFLICT DO NOTHING
+        """, (friend_id, user_id))
+        conn.commit()
+    finally:
+        cur.close()
         conn.close()
 
-        return {
-            "id": user_id,
-            "username": username,
-            "email": email,
-            "registration_date": registration_date.isoformat() if registration_date else None,
-            "description": description,
-            "gender": gender,
-            "photo": photo,
-            "is_admin": is_admin
-        }
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail="Internal server error")
-
+    return {"message": "Добавлен в друзья"}
 
 @router.post("/api/profile/update")
 async def update_profile(
-        user_id: int = Depends(get_current_user),
-        username: str = Form(...),
-        email: str = Form(...),
-        description: str = Form(""),
-        gender: str = Form(""),
-        photo: UploadFile = File(None)
+    user_id: int = Depends(get_current_user),
+    username: str = Form(...),
+    email: str = Form(...),
+    description: str = Form(""),
+    gender: str = Form(""),
+    photo: UploadFile = File(None),
+    photo_delete: bool = Form(False)
 ):
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
 
         photo_path = None
+
+        # Если пользователь запросил удаление фото
+        if photo_delete:
+            # Получим текущий путь фото
+            cursor.execute("SELECT photo FROM users WHERE id = %s", (user_id,))
+            current_photo = cursor.fetchone()[0]
+            if current_photo:
+                full_path = f"app{current_photo}"
+                if os.path.exists(full_path):
+                    os.remove(full_path)
+            photo_path = None  # явно указываем, что поле должно быть пустым
+
+        # Если загружено новое фото
         if photo:
-            # Создаём папку для пользователя
             user_folder = f"app/static/images/user_photo/{user_id}"
             os.makedirs(user_folder, exist_ok=True)
-
-            # Безопасное имя файла
             filename = photo.filename.replace(" ", "_")
             file_path = os.path.join(user_folder, filename)
 
-            # Сохраняем файл
             with open(file_path, "wb") as f:
                 f.write(await photo.read())
 
-            # Сохраняемый путь относительно сервера
             photo_path = f"/static/images/user_photo/{user_id}/{filename}"
 
-        # Составляем запрос
-        if photo_path:
+        # Обновляем пользователя
+        if photo_path is not None or photo_delete:
             cursor.execute("""
                 UPDATE users 
                 SET username = %s, email = %s, description = %s, gender = %s, photo = %s
@@ -326,3 +369,145 @@ async def unblock_user(user_id: int, current_id: int = Depends(get_current_user)
     except Exception as e:
         raise HTTPException(status_code=500, detail="Ошибка разблокировки пользователя")
 
+
+@router.post("/api/admin/comments/{comment_id}/approve")
+def approve_comment(comment_id: int, current_id: int = Depends(get_current_user)):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT is_admin FROM users WHERE id = %s", (current_id,))
+    is_admin = cursor.fetchone()
+    if not is_admin or not is_admin[0]:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    cursor.execute("UPDATE comments SET is_published = TRUE WHERE id = %s", (comment_id,))
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+    return {"message": "Комментарий одобрен"}
+
+
+YANDEX_API_KEY = os.getenv("df26c33f-b6e4-4442-bc85-0c1c3461ed2a")
+
+@router.post("/api/admin/resorts")
+async def create_resort(
+    name: str = Form(...),
+    information: str = Form(...),
+    trail_length: int = Form(...),
+    max_height: int = Form(...),
+    season: str = Form(...),
+    country: str = Form(...),
+    tracks: str = Form(...),
+    how_to_get_there: str = Form(...),
+    nearby_cities: str = Form(...),
+    related_ski_areas: str = Form(...),
+    features: str = Form(...),
+    ski_pass: str = Form(...),
+    latitude: float = Form(None),
+    longitude: float = Form(None),
+    images: list[UploadFile] = File(...),
+    user_id: int = Depends(get_current_user)
+):
+    conn = get_db_connection()
+    cur = conn.cursor()
+
+    # Проверка админа
+    cur.execute("SELECT is_admin FROM users WHERE id = %s", (user_id,))
+    if not cur.fetchone()[0]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    # Добавление курорта
+    cur.execute("""
+        INSERT INTO ski_resort (name, information, trail_length, changes, max_height, num_reviews, season, country)
+        VALUES (%s, %s, %s, 0, %s, 0, %s, %s) RETURNING id
+    """, (name, information, trail_length, max_height, season, country))
+    resort_id = cur.fetchone()[0]
+
+    # Трассы
+    for t in json.loads(tracks):
+        cur.execute("""
+            INSERT INTO tracks (resort_id, trail_type, trail_length)
+            VALUES (%s, %s, %s)
+        """, (resort_id, t["trail_type"], t["trail_length"]))
+
+    # Ски-пасс
+    prices = json.loads(ski_pass)
+    cur.execute("""
+        INSERT INTO ski_pass (
+            resort_id, price_day, price_child, price_2_days, price_3_days,
+            price_4_days, price_5_days, price_6_days, price_7_days, season_pass
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+    """, (
+        resort_id, prices["price_day"], prices["price_child"],
+        prices["price_2_days"], prices["price_3_days"], prices["price_4_days"],
+        prices["price_5_days"], prices["price_6_days"], prices["price_7_days"],
+        prices["season_pass"]
+    ))
+
+    # Изображения
+    image_dir = f"static/images/resorts/{resort_id}"
+    os.makedirs(image_dir, exist_ok=True)
+    for idx, image in enumerate(images, 1):
+        ext = os.path.splitext(image.filename)[1]
+        path = f"{image_dir}/img{idx}{ext}"
+        with open(path, "wb") as buffer:
+            shutil.copyfileobj(image.file, buffer)
+        cur.execute("""
+            INSERT INTO resort_images (resort_id, image_path)
+            VALUES (%s, %s)
+        """, (resort_id, f"/{path}"))
+
+    # Координаты (если не указаны — получить через Яндекс)
+    if latitude is None or longitude is None:
+        address = f"{country}, {name}"
+        geo_url = f"https://geocode-maps.yandex.ru/1.x/?apikey={YANDEX_API_KEY}&geocode={address}&format=json"
+        response = requests.get(geo_url)
+        try:
+            pos = response.json()["response"]["GeoObjectCollection"]["featureMember"][0]["GeoObject"]["Point"]["pos"]
+            longitude, latitude = map(float, pos.split())
+        except Exception:
+            latitude = longitude = None
+
+    if latitude is not None and longitude is not None:
+        cur.execute("""
+            INSERT INTO coordinates_resort (resort_id, latitude, longitude)
+            VALUES (%s, %s, %s)
+        """, (resort_id, latitude, longitude))
+
+    # Начальная запись о погоде
+    cur.execute("""
+        INSERT INTO resort_weather (resort_id, snow_last_3_days, snow_expected, has_glacier, updated_at)
+        VALUES (%s, 0, 0, false, %s)
+    """, (resort_id, datetime.utcnow()))
+
+    cur.execute("""
+        INSERT INTO resort_extra_info (resort_id, how_to_get_there, nearby_cities, related_ski_areas)
+        VALUES (%s, %s, %s, %s)
+    """, (resort_id, how_to_get_there, nearby_cities, related_ski_areas))
+
+    f = json.loads(features)
+    cur.execute("""
+        INSERT INTO resort_features (
+            resort_id, panoramic_trails_above_2500m, guaranteed_snow, snowboard_friendly,
+            night_skiing, kiting_available, snowparks_count, halfpipes_count, artificial_snow,
+            forest_trails, glacier_available, summer_skiing, freeride_opportunities,
+            official_freeride_zones, backcountry_routes, heliski_available,
+            official_freeride_guides, kids_ski_schools, fis_certified_trails_count
+        ) VALUES (
+            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+        )
+    """, (
+        resort_id, f["panoramic_trails_above_2500m"], f["guaranteed_snow"], f["snowboard_friendly"],
+        f["night_skiing"], f["kiting_available"], f["snowparks_count"], f["halfpipes_count"],
+        f["artificial_snow"], f["forest_trails"], f["glacier_available"], f["summer_skiing"],
+        f["freeride_opportunities"], f["official_freeride_zones"], f["backcountry_routes"],
+        f["heliski_available"], f["official_freeride_guides"], f["kids_ski_schools"],
+        f["fis_certified_trails_count"]
+    ))
+
+    conn.commit()
+    cur.close()
+    conn.close()
+    return {"message": "Курорт успешно добавлен"}

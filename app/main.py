@@ -21,6 +21,8 @@ from app.resort_images import router as resort_images_router
 from app.hotels_images import router as hotels_images_router
 from app.resort_features import router as resort_features_router
 from app.comments import router as comments_router
+from app.bloggers import router as bloggers_router
+from app.friends import router as friends_router
 
 import os
 
@@ -68,3 +70,5 @@ app.include_router(resort_submit_router)
 app.include_router(hotels_images_router)
 app.include_router(comments_router)
 app.include_router(resort_features_router)
+app.include_router(bloggers_router)
+app.include_router(friends_router)

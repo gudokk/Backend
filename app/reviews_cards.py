@@ -46,7 +46,7 @@ def get_reviews_by_resort(resort_id: int):
 
             FROM resort_reviews r
             JOIN users u ON r.user_id = u.id
-            WHERE r.resort_id = %s
+            WHERE r.resort_id = %s AND r.status = 'approve'
             ORDER BY r.created_at DESC
         """, (resort_id,))
 
@@ -84,6 +84,58 @@ def get_reviews_by_resort(resort_id: int):
             })
 
         return reviews
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/api/resorts/preview-reviews")
+def get_recent_reviews_preview():
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        cur.execute("""
+            SELECT
+                r.id,
+                u.username,
+                r.overall_comment,
+                r.created_at,
+                s.name AS resort_name,
+                s.country,
+                r.resort_id,
+                ROUND((
+                    COALESCE(r.rating_skiing, 0) +
+                    COALESCE(r.rating_lifts, 0) +
+                    COALESCE(r.rating_prices, 0) +
+                    COALESCE(r.rating_snow_weather, 0) +
+                    COALESCE(r.rating_accommodation, 0) +
+                    COALESCE(r.rating_people, 0) +
+                    COALESCE(r.rating_apres_ski, 0)
+                )::numeric / 7, 1) AS average_rating
+            FROM resort_reviews r
+            JOIN users u ON r.user_id = u.id
+            JOIN ski_resort s ON r.resort_id = s.id
+            ORDER BY r.created_at DESC
+            LIMIT 6
+        """)
+
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+
+        return [
+            {
+                "id": row[0],
+                "username": row[1],
+                "overall_comment": row[2],
+                "created_at": row[3],
+                "resort_name": row[4],
+                "country": row[5],
+                "resort_id": row[6],
+                "average_rating": float(row[7])
+            }
+            for row in rows
+        ]
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

@@ -13,6 +13,8 @@ PUBLIC_PATH_PATTERNS = [
     r"^/api/newsPage$",
     r"^/api/newsPage/\d+$",
     r"^/api/resorts$",
+    r"/api/blogger-reviews",
+    r"/api//blogger-reviews/[^/]/images",
     r"^/api/resorts-table$",
     r"^/api/resort-features/\d+$",
     r"^/api/resorts/selector$",

@@ -1,6 +1,6 @@
 # app/auth.py
 
-from fastapi import APIRouter, HTTPException, Header, Depends, File, UploadFile, Form, status, requests
+from fastapi import APIRouter, HTTPException, Header, Depends, File, UploadFile, Form, status
 from .models import UserCreate, UserLogin
 import os, shutil, json
 from fastapi.responses import JSONResponse
@@ -9,6 +9,7 @@ from .config import SECRET_KEY, ALGORITHM
 from jose import jwt, JWTError
 import bcrypt
 import datetime
+import requests
 
 router = APIRouter()
 
@@ -154,6 +155,7 @@ def get_profile(user_id=Depends(get_current_user)):
     conn = get_db_connection()
     cur = conn.cursor()
 
+    # Получаем данные пользователя
     cur.execute("""
         SELECT id, username, email, registration_date, description, gender, photo, is_admin, is_blogger
         FROM users
@@ -161,6 +163,12 @@ def get_profile(user_id=Depends(get_current_user)):
     """, (user_id,))
     row = cur.fetchone()
 
+    if not row:
+        cur.close()
+        conn.close()
+        raise HTTPException(status_code=404, detail="Пользователь не найден")
+
+    # Проверяем наличие ожидающей заявки блогера
     cur.execute("""
         SELECT EXISTS (
             SELECT 1 FROM blogger_requests
@@ -168,6 +176,14 @@ def get_profile(user_id=Depends(get_current_user)):
         )
     """, (user_id,))
     has_pending = cur.fetchone()[0]
+
+    # Считаем количество друзей (принятые заявки)
+    cur.execute("""
+        SELECT COUNT(*) FROM friendships
+        WHERE (user_id1 = %s OR user_id2 = %s)
+          AND status = 'accepted'
+    """, (user_id, user_id))
+    friends_count = cur.fetchone()[0]
 
     cur.close()
     conn.close()
@@ -182,51 +198,11 @@ def get_profile(user_id=Depends(get_current_user)):
         "photo": row[6],
         "is_admin": row[7],
         "is_blogger": row[8],
-        "has_pending_blogger_request": has_pending  # 👈 добавили поле
+        "has_pending_blogger_request": has_pending,
+        "friends_count": friends_count
     }
 
-@router.get("/api/users/search")
-def search_users(query: str, user_id: int = Depends(get_current_user)):
-    conn = get_db_connection()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT id, username FROM users
-        WHERE username ILIKE %s AND id != %s
-        LIMIT 20
-    """, (f"%{query}%", user_id))
-    results = cur.fetchall()
-    cur.close()
-    conn.close()
-    return [{"id": r[0], "username": r[1]} for r in results]
 
-@router.post("/api/friends/add/{friend_id}")
-def add_friend(friend_id: int, user_id: int = Depends(get_current_user)):
-    if friend_id == user_id:
-        raise HTTPException(400, detail="Нельзя добавить самого себя")
-    conn = get_db_connection()
-    cur = conn.cursor()
-
-    # Проверка на существование
-    cur.execute("SELECT 1 FROM users WHERE id = %s", (friend_id,))
-    if not cur.fetchone():
-        raise HTTPException(404, detail="Пользователь не найден")
-
-    # Вставка двух записей
-    try:
-        cur.execute("""
-            INSERT INTO friendships (user_id, friend_id) VALUES (%s, %s)
-            ON CONFLICT DO NOTHING
-        """, (user_id, friend_id))
-        cur.execute("""
-            INSERT INTO friendships (user_id, friend_id) VALUES (%s, %s)
-            ON CONFLICT DO NOTHING
-        """, (friend_id, user_id))
-        conn.commit()
-    finally:
-        cur.close()
-        conn.close()
-
-    return {"message": "Добавлен в друзья"}
 
 @router.post("/api/profile/update")
 async def update_profile(
@@ -250,7 +226,7 @@ async def update_profile(
             cursor.execute("SELECT photo FROM users WHERE id = %s", (user_id,))
             current_photo = cursor.fetchone()[0]
             if current_photo:
-                full_path = f"app{current_photo}"
+                full_path = f"app/{current_photo}"
                 if os.path.exists(full_path):
                     os.remove(full_path)
             photo_path = None  # явно указываем, что поле должно быть пустым
@@ -387,7 +363,6 @@ def approve_comment(comment_id: int, current_id: int = Depends(get_current_user)
 
     return {"message": "Комментарий одобрен"}
 
-
 YANDEX_API_KEY = os.getenv("df26c33f-b6e4-4442-bc85-0c1c3461ed2a")
 
 @router.post("/api/admin/resorts")
@@ -398,6 +373,7 @@ async def create_resort(
     max_height: int = Form(...),
     season: str = Form(...),
     country: str = Form(...),
+    visa: bool = Form(...),
     tracks: str = Form(...),
     how_to_get_there: str = Form(...),
     nearby_cities: str = Form(...),
@@ -447,17 +423,24 @@ async def create_resort(
     ))
 
     # Изображения
-    image_dir = f"static/images/resorts/{resort_id}"
-    os.makedirs(image_dir, exist_ok=True)
+    # Изображения
+    save_dir = f"app/static/images/resorts/{resort_id}"
+    os.makedirs(save_dir, exist_ok=True)
+
+    url_path = f"/static/images/resorts/{resort_id}"
+
     for idx, image in enumerate(images, 1):
         ext = os.path.splitext(image.filename)[1]
-        path = f"{image_dir}/img{idx}{ext}"
-        with open(path, "wb") as buffer:
+        save_path = f"{save_dir}/img{idx}{ext}"  # абсолютный путь для сохранения
+        url = f"{url_path}/img{idx}{ext}"  # относительный URL
+
+        with open(save_path, "wb") as buffer:
             shutil.copyfileobj(image.file, buffer)
+
         cur.execute("""
             INSERT INTO resort_images (resort_id, image_path)
             VALUES (%s, %s)
-        """, (resort_id, f"/{path}"))
+        """, (resort_id, url))
 
     # Координаты (если не указаны — получить через Яндекс)
     if latitude is None or longitude is None:
@@ -479,8 +462,8 @@ async def create_resort(
     # Начальная запись о погоде
     cur.execute("""
         INSERT INTO resort_weather (resort_id, snow_last_3_days, snow_expected, has_glacier, updated_at)
-        VALUES (%s, 0, 0, false, %s)
-    """, (resort_id, datetime.utcnow()))
+        VALUES (%s,False, False, False, %s)
+    """, (resort_id, datetime.datetime.utcnow()))
 
     cur.execute("""
         INSERT INTO resort_extra_info (resort_id, how_to_get_there, nearby_cities, related_ski_areas)
@@ -511,3 +494,4 @@ async def create_resort(
     cur.close()
     conn.close()
     return {"message": "Курорт успешно добавлен"}
+

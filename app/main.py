@@ -23,7 +23,8 @@ from app.resort_features import router as resort_features_router
 from app.comments import router as comments_router
 from app.bloggers import router as bloggers_router
 from app.friends import router as friends_router
-
+from app.trips import router as trips_router
+from dotenv import load_dotenv
 import os
 
 app = FastAPI()
@@ -34,8 +35,10 @@ app.mount(
     name="static"
 )
 
+load_dotenv()
 
-# app.mount("/static", StaticFiles(directory="static"), name="static")
+YANDEX_API_KEY = os.getenv("YANDEX_API_KEY")
+# print("API KEY:", YANDEX_API_KEY)
 
 # CORS настройка
 middleware = [
@@ -72,3 +75,4 @@ app.include_router(comments_router)
 app.include_router(resort_features_router)
 app.include_router(bloggers_router)
 app.include_router(friends_router)
+app.include_router(trips_router)

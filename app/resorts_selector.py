@@ -8,7 +8,8 @@ router = APIRouter()
 def get_resorts_for_selector(
     snow_last_3_days: Optional[bool] = Query(None),
     snow_expected: Optional[bool] = Query(None),
-    slopes: Optional[str] = Query(None)  # Новое поле: "Синие", "Красные", "Чёрные"
+    slopes: Optional[str] = Query(None),
+    visa: Optional[str] = Query(None)
 ):
     try:
         conn = get_db_connection()
@@ -25,15 +26,21 @@ def get_resorts_for_selector(
             filters.append("rwth.snow_expected = %s")
             params.append(snow_expected)
 
+        # Фильтрация по трассам с ненулевой длиной
         if slopes:
-            if slopes == "Зелёные":
-                filters.append("COALESCE(trails.trail_green, 0) > 0")
-            elif slopes == "Синие":
-                filters.append("COALESCE(trails.trail_blue, 0) > 0")
-            elif slopes == "Красные":
-                filters.append("COALESCE(trails.trail_red, 0) > 0")
+            if slopes == "Зелёная":
+                filters.append("trails.trail_green > 0")
+            elif slopes == "Синяя":
+                filters.append("trails.trail_blue > 0")
+            elif slopes == "Красная":
+                filters.append("trails.trail_red > 0")
             elif slopes == "Чёрная":
-                filters.append("COALESCE(trails.trail_black, 0) > 0")
+                filters.append("trails.trail_black > 0")
+        if visa:
+            if visa == "no":
+                filters.append("sr.visa = false")
+            elif visa == "yes":
+                filters.append("sr.visa = true")
 
         where_clause = "WHERE " + " AND ".join(filters) if filters else ""
 

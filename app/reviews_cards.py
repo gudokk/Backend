@@ -115,8 +115,9 @@ def get_recent_reviews_preview():
             FROM resort_reviews r
             JOIN users u ON r.user_id = u.id
             JOIN ski_resort s ON r.resort_id = s.id
+            WHERE r.status = 'approve'
             ORDER BY r.created_at DESC
-            LIMIT 6
+            LIMIT 3
         """)
 
         rows = cur.fetchall()
